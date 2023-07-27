@@ -63,7 +63,13 @@ module Webdrivers
       private
 
       def latest_point_release(version)
-        normalize_version(Network.get(URI.join(base_url, "LATEST_RELEASE_#{version}")))
+        if normalize_version(version) < normalize_version('115')
+          normalize_version(Network.get(URI.join(base_url, "LATEST_RELEASE_#{version}")))
+        else
+          Network.get(URI('https://googlechromelabs.github.io/chrome-for-testing/latest-patch-versions-per-build.json'))
+                 .then { |json| JSON.parse(json) }
+                 .then { |json| json.dig('builds', version.to_s, 'version') }
+        end
       rescue NetworkError
         msg = "Unable to find latest point release version for #{version}."
         msg = begin
@@ -106,7 +112,16 @@ module Webdrivers
       end
 
       def direct_url(driver_version)
-        "#{base_url}/#{driver_version}/chromedriver_#{driver_filename(driver_version)}.zip"
+        if driver_version < normalize_version('115')
+          "#{base_url}/#{driver_version}/chromedriver_#{driver_filename(driver_version)}.zip"
+        else
+          Network.get(URI('https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json'))
+                 .then { |json| JSON.parse(json, symbolize_names: true) }
+                 .then { |json| json[:versions].find { |v| v[:version] == driver_version.to_s } }
+                 .then { |json| json.dig(:downloads, :chromedriver) }
+                 .then { |json| json.find { |d| d[:platform] == platform } }
+                 .then { |json| json[:url] }
+        end
       end
 
       def driver_filename(driver_version)
@@ -116,6 +131,18 @@ module Webdrivers
           'linux64'
         elsif System.platform == 'mac'
           apple_filename(driver_version)
+        else
+          raise 'Failed to determine driver filename to download for your OS.'
+        end
+      end
+
+      def platform
+        if System.platform == 'win' || System.wsl_v1?
+          "win#{System.bitsize}"
+        elsif System.platform == 'linux'
+          'linux64'
+        elsif System.platform == 'mac'
+          System.apple_m1_architecture? ? 'mac-arm64' : 'mac-x64'
         else
           raise 'Failed to determine driver filename to download for your OS.'
         end
